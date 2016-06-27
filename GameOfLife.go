@@ -2,6 +2,10 @@
 // * separate into 2 files, GameOfLife.go and js.go (and, maybe, termbox?)
 // * clean code
 // * git repo
+// * remove/hide global variables
+// * add termbox output support
+// * create Makefile to build js-canvas and termbox
+
 package main
 import "time"
 import "math/rand"
@@ -13,6 +17,7 @@ const (
 	GENERATIONS = 100
 	CELL_SIZE = 12
 	TICK_LENGTH = 100 // milliseconds
+	INITIAL_ALIVE_THRESHOLD = 35 // percentage
 )
 
 var g_rows, g_cols int
@@ -52,28 +57,42 @@ type cell struct {
 // ======================================================================
 type Board struct {
 	rows, cols int
-	board [][]cell
+	board [][][]cell
+	current, temp int
+	generation int
 }
 
 func NewBoard(r, c int) *Board {
-	board := make([][]cell, r)
-	for i:=0; i<r; i++ {
-		board[i] = make([]cell, c)
+	b := &Board{}
+	b.rows = r
+	b.cols = c
+
+	b.board = make([][][]cell, 2, 2)
+	b.current = 0
+	b.temp = 1
+	b.board[b.current] = make([][]cell, b.rows, b.rows)
+	b.board[b.temp] = make([][]cell, b.rows, b.rows)
+
+	for y := 0; y < b.rows; y++ {
+		b.board[b.current][y] = make([]cell, b.cols, b.cols)
+		b.board[b.temp][y] = make([]cell, b.cols, b.cols)
+
 	}
-	return &Board{rows: r, cols: c, board: board}
+
+	return b
 }
 
-func NewRandomBoard(r, c int) *Board {
-	b := NewBoard(r, c)
+func (b *Board) RandomlySeedBoard() *Board {
 	for r:=0; r<b.rows; r++ {
 		for c:=0; c<b.cols; c++ {
-			if rand.Intn(100) < 25 {
-				b.board[r][c].alive = true
+			if rand.Intn(100) < INITIAL_ALIVE_THRESHOLD {
+				b.board[b.current][r][c].alive = true
 			} else {
-				b.board[r][c].alive = false
+				b.board[b.current][r][c].alive = false
 			}
 		}
 	}
+
 	return b
 }
 
@@ -83,32 +102,32 @@ func (b *Board) cellNeighbours(r, c int) (neighbours int) {
 	}
 
 	// c-1
-	if isValid(r-1, c-1) && b.board[r-1][c-1].alive {
+	if isValid(r-1, c-1) && b.board[b.current][r-1][c-1].alive {
 		neighbours++
 	}
-	if isValid(r, c-1) && b.board[r][c-1].alive {
+	if isValid(r, c-1) && b.board[b.current][r][c-1].alive {
 		neighbours++
 	}
-	if isValid(r+1, c-1) && b.board[r+1][c-1].alive {
+	if isValid(r+1, c-1) && b.board[b.current][r+1][c-1].alive {
 		neighbours++
 	}
 
 	// c
-	if isValid(r-1, c) && b.board[r-1][c].alive {
+	if isValid(r-1, c) && b.board[b.current][r-1][c].alive {
 		neighbours++
 	}
-	if isValid(r+1, c) && b.board[r+1][c].alive {
+	if isValid(r+1, c) && b.board[b.current][r+1][c].alive {
 		neighbours++
 	}
 
 	// c+1
-	if isValid(r-1, c+1) && b.board[r-1][c+1].alive {
+	if isValid(r-1, c+1) && b.board[b.current][r-1][c+1].alive {
 		neighbours++
 	}
-	if isValid(r, c+1) && b.board[r][c+1].alive {
+	if isValid(r, c+1) && b.board[b.current][r][c+1].alive {
 		neighbours++
 	}
-	if isValid(r+1, c+1) && b.board[r+1][c+1].alive {
+	if isValid(r+1, c+1) && b.board[b.current][r+1][c+1].alive {
 		neighbours++
 	}
 
@@ -117,29 +136,24 @@ func (b *Board) cellNeighbours(r, c int) (neighbours int) {
 
 // step - make a new generation. Kill dead cells, make alive ones.
 func (b *Board) step() {
-	temp := make([][]cell, b.rows)
-	for i:=0; i<b.rows; i++ {
-		temp[i] = make([]cell, b.cols)
-	}
-
 	for r:=0; r<b.rows; r++ {
 		for c:=0; c<b.cols; c++ {
 			n := b.cellNeighbours(r, c)
 			if n == 3 {
-				temp[r][c] = b.board[r][c]
-				if temp[r][c].alive == false {
-					temp[r][c].alive = true
-					temp[r][c].generation = Generation
+				b.board[b.temp][r][c] = b.board[b.current][r][c]
+				if b.board[b.temp][r][c].alive == false {
+					b.board[b.temp][r][c].alive = true
+					b.board[b.temp][r][c].generation = b.generation
 				}
 			} else if n == 2 {
-				temp[r][c] = b.board[r][c]
+				b.board[b.temp][r][c] = b.board[b.current][r][c]
 			} else {
-				temp[r][c].alive = false
+				b.board[b.temp][r][c].alive = false
 			}
 		}
 	}
 
-	b.board = temp
+	b.current, b.temp = b.temp, b.current // amazing swap $ -)
 }
 
 func (b *Board) draw(ctx *js.Object) {
@@ -147,13 +161,9 @@ func (b *Board) draw(ctx *js.Object) {
 		for c:=0; c<b.cols; c++ {
 			ctx.Set("strokeStyle", "rgba(242, 198, 65, 0.1)")
 			ctx.Call("strokeRect", c*CELL_SIZE, r*CELL_SIZE, CELL_SIZE, CELL_SIZE)
-			if b.board[r][c].alive {
-				//ctx.Set("fillStyle", "#AAAAAA")
-				//ctx.Set("fillStyle", "rgb(242, 198, 65)")
-				//color := colors[b.board[r][c].generation%len(colors)]
-				ctx.Set("fillStyle",color)
+			if b.board[b.current][r][c].alive {
+				ctx.Set("fillStyle", color)
 			} else {
-				//ctx.Set("fillStyle", "#442200")
 				ctx.Set("fillStyle", "rgb(38, 38, 38)")
 			}
 			ctx.Call("fillRect", c*CELL_SIZE, r*CELL_SIZE, CELL_SIZE, CELL_SIZE)
@@ -212,12 +222,14 @@ func createCanvas() *js.Object {
 	return canvas
 }
 
+/*
 func createTextOutput() *js.Object {
 	document := js.Global.Get("document")
 	p := document.Call("createElement", "p")
 	document.Get("body").Call("appendChild", p)
 	return p
 }
+*/
 
 // ======================================================================
 // main
@@ -228,14 +240,14 @@ var g_board Board
 func main() {
 	rand.Seed(time.Now().UnixNano())
 
-
 	color = colors[rand.Intn(len(colors))]
-	//color = "lime"
 
 	canvas := createCanvas()
 	ctx := canvas.Call("getContext", "2d")
 
-	g_board = *NewRandomBoard(g_rows, g_cols)
+	g_board = *NewBoard(g_rows, g_cols)
+	g_board.RandomlySeedBoard()
+	//g_board = *NewRandomBoard(g_rows, g_cols)
 
 	println("Canvas initalized.")
 
